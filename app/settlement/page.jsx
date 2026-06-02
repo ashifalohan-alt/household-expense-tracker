@@ -20,6 +20,7 @@ export default function SettlementPage() {
   const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
   const firstDay = `${currentYear}-${String(currentMonth).padStart(2, "0")}-01`;
+  const lastDay = new Date(currentYear, currentMonth, 0).toISOString().split("T")[0];
 
   const [startDate, setStartDate] = useState(firstDay);
   const [endDate, setEndDate] = useState(now.toISOString().split("T")[0]);
@@ -42,8 +43,7 @@ export default function SettlementPage() {
         .limit(20);
       setHistory(hist || []);
 
-      // Monthly mode এ auto load
-      await fetchExpenses("monthly", firstDay, now.toISOString().split("T")[0]);
+      await fetchExpenses("monthly", firstDay, lastDay);
       setLoading(false);
     };
     init();
@@ -51,7 +51,7 @@ export default function SettlementPage() {
 
   const fetchExpenses = async (mode, start, end) => {
     const s = mode === "monthly" ? firstDay : start;
-    const e = mode === "monthly" ? `${currentYear}-${String(currentMonth).padStart(2, "0")}-31` : end;
+    const e = mode === "monthly" ? lastDay : end;
     const { data: exp } = await supabase
       .from("expenses")
       .select("*")
@@ -65,7 +65,7 @@ export default function SettlementPage() {
     setDateMode(mode);
     setCalculated(false);
     if (mode === "monthly") {
-      fetchExpenses("monthly", firstDay, "");
+      fetchExpenses("monthly", firstDay, lastDay);
     }
   };
 
@@ -147,7 +147,6 @@ export default function SettlementPage() {
 
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "var(--bg-primary)", paddingBottom: "2rem" }}>
-      {/* Header */}
       <div style={{ backgroundColor: "var(--bg-card)", padding: "1rem 1.5rem", display: "flex", alignItems: "center", gap: "1rem", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 100 }}>
         <button onClick={() => router.back()} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-primary)" }}>
           <ArrowLeft size={22} />
@@ -163,8 +162,6 @@ export default function SettlementPage() {
       </div>
 
       <div style={{ padding: "1rem", maxWidth: "600px", margin: "0 auto" }}>
-
-        {/* Date Mode Toggle */}
         <div style={{ display: "flex", backgroundColor: "var(--bg-card)", borderRadius: "0.75rem", padding: "4px", marginBottom: "1rem", border: "1px solid var(--border)" }}>
           {[
             { id: "monthly", label: "📅 This Month" },
@@ -177,7 +174,6 @@ export default function SettlementPage() {
           ))}
         </div>
 
-        {/* Custom Date Range */}
         {dateMode === "custom" && (
           <div style={{ backgroundColor: "var(--bg-card)", borderRadius: "1rem", padding: "1.25rem", marginBottom: "1rem", border: "1px solid var(--border)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1rem" }}>
@@ -203,10 +199,8 @@ export default function SettlementPage() {
           </div>
         )}
 
-        {/* Results — only show after calculated */}
         {calculated && (
           <>
-            {/* Summary Cards */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem", marginBottom: "1.5rem" }}>
               {[
                 { label: "Total", value: fmt(totalExpense), color: "var(--text-primary)" },
@@ -220,7 +214,6 @@ export default function SettlementPage() {
               ))}
             </div>
 
-            {/* Everyone's Summary */}
             <div style={{ backgroundColor: "var(--bg-card)", borderRadius: "1rem", padding: "1.25rem", marginBottom: "1.5rem", border: "1px solid var(--border)" }}>
               <h3 style={{ color: "var(--text-primary)", fontWeight: "700", fontSize: "0.95rem", marginBottom: "1rem" }}>👥 Everyone's Summary</h3>
               {profiles.map((p, i) => {
@@ -250,7 +243,6 @@ export default function SettlementPage() {
               })}
             </div>
 
-            {/* Tabs */}
             <div style={{ display: "flex", backgroundColor: "var(--bg-card)", borderRadius: "0.75rem", padding: "4px", marginBottom: "1.5rem", border: "1px solid var(--border)" }}>
               {[
                 { id: "current", label: "💸 To Pay" },
@@ -263,7 +255,6 @@ export default function SettlementPage() {
               ))}
             </div>
 
-            {/* To Pay */}
             {activeTab === "current" && (
               <div>
                 {transactions.length === 0 ? (
@@ -316,7 +307,6 @@ export default function SettlementPage() {
               </div>
             )}
 
-            {/* History */}
             {activeTab === "history" && (
               <div>
                 {history.length === 0 ? (
