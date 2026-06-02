@@ -10,6 +10,7 @@ export default function SettlementPage() {
   const [profiles, setProfiles] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [history, setHistory] = useState([]);
+  const [paidTransactions, setPaidTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("current");
   const [marking, setMarking] = useState(null);
@@ -42,6 +43,14 @@ export default function SettlementPage() {
         .order("paid_at", { ascending: false })
         .limit(20);
       setHistory(hist || []);
+
+      // এই মাসে কোন payments already done
+      const { data: paid } = await supabase
+        .from("settlement_history")
+        .select("from_user, to_user")
+        .eq("month", currentMonth)
+        .eq("year", currentYear);
+      setPaidTransactions(paid || []);
 
       await fetchExpenses("monthly", firstDay, lastDay);
       setLoading(false);
@@ -104,10 +113,14 @@ export default function SettlementPage() {
       if (cred[i].balance < 0.01) i++;
       if (debt[j].balance > -0.01) j++;
     }
-    return transactions;
+
+    // Already paid transactions filter করো
+    return transactions.filter(t =>
+      !paidTransactions.some(p => p.from_user === t.from_id && p.to_user === t.to_id)
+    );
   };
 
-  const transactions = calculateSettlements();
+  const allTransactions = calculateSettlements();
   const totalExpense = expenses.reduce((sum, e) => sum + Number(e.total_amount), 0);
   const perPerson = profiles.length > 0 ? totalExpense / profiles.length : 0;
   const userSpent = expenses.filter(e => e.user_id === user?.id).reduce((sum, e) => sum + Number(e.total_amount), 0);
@@ -124,8 +137,18 @@ export default function SettlementPage() {
         year: currentYear,
         paid_at: new Date().toISOString(),
       });
-      alert(`✅ Payment of ${fmt(transaction.amount)} marked as paid!`);
-      window.location.reload();
+
+      // Local state update — reload ছাড়াই সরে যাবে
+      setPaidTransactions(prev => [...prev, { from_user: transaction.from_id, to_user: transaction.to_id }]);
+
+      // History তে যোগ করো
+      const { data: hist } = await supabase
+        .from("settlement_history")
+        .select("*, from_profile:from_user(full_name), to_profile:to_user(full_name)")
+        .order("paid_at", { ascending: false })
+        .limit(20);
+      setHistory(hist || []);
+
     } catch (error) {
       alert("Error: " + error.message);
     } finally {
@@ -257,14 +280,14 @@ export default function SettlementPage() {
 
             {activeTab === "current" && (
               <div>
-                {transactions.length === 0 ? (
+                {allTransactions.length === 0 ? (
                   <div style={{ backgroundColor: "var(--bg-card)", borderRadius: "1rem", padding: "2rem", textAlign: "center", border: "1px solid var(--border)" }}>
                     <CheckCircle size={48} color="var(--income)" style={{ margin: "0 auto 1rem" }} />
                     <p style={{ color: "var(--income)", fontWeight: "700", fontSize: "1rem" }}>All Settled! 🎉</p>
                     <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginTop: "0.5rem" }}>No pending payments</p>
                   </div>
                 ) : (
-                  transactions.map((t, i) => {
+                  allTransactions.map((t, i) => {
                     const isMe = t.from_id === user?.id;
                     const isPaying = marking === `${t.from_id}-${t.to_id}`;
                     return (
