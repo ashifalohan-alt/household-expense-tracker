@@ -2,11 +2,12 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CheckCircle, Calendar } from "lucide-react";
+import { ArrowLeft, CheckCircle, Calendar, Trash2 } from "lucide-react";
 
 export default function SettlementPage() {
   const router = useRouter();
   const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [history, setHistory] = useState([]);
@@ -34,17 +35,14 @@ export default function SettlementPage() {
       if (!user) { router.push("/login"); return; }
       setUser(user);
 
+      const { data: prof } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+      setProfile(prof);
+
       const { data: profs } = await supabase.from("profiles").select("*");
       setProfiles(profs || []);
 
-      const { data: hist } = await supabase
-        .from("settlement_history")
-        .select("*, from_profile:from_user(full_name), to_profile:to_user(full_name)")
-        .order("paid_at", { ascending: false })
-        .limit(20);
-      setHistory(hist || []);
+      await loadHistory();
 
-      // amount সহ paid transactions
       const { data: paid } = await supabase
         .from("settlement_history")
         .select("from_user, to_user, amount")
@@ -57,6 +55,15 @@ export default function SettlementPage() {
     };
     init();
   }, []);
+
+  const loadHistory = async () => {
+    const { data: hist } = await supabase
+      .from("settlement_history")
+      .select("*, from_profile:from_user(full_name), to_profile:to_user(full_name)")
+      .order("paid_at", { ascending: false })
+      .limit(20);
+    setHistory(hist || []);
+  };
 
   const fetchExpenses = async (mode, start, end) => {
     const s = mode === "monthly" ? firstDay : start;
@@ -73,9 +80,13 @@ export default function SettlementPage() {
   const handleDateModeChange = (mode) => {
     setDateMode(mode);
     setCalculated(false);
-    if (mode === "monthly") {
-      fetchExpenses("monthly", firstDay, lastDay);
-    }
+    if (mode === "monthly") fetchExpenses("monthly", firstDay, lastDay);
+  };
+
+  const handleDeleteHistory = async (id) => {
+    if (!confirm("Delete this history record?")) return;
+    await supabase.from("settlement_history").delete().eq("id", id);
+    setHistory(history.filter(h => h.id !== id));
   };
 
   const calculateSettlements = () => {
@@ -100,11 +111,9 @@ export default function SettlementPage() {
     while (i < cred.length && j < debt.length) {
       const amount = Math.min(cred[i].balance, -debt[j].balance);
       if (amount > 0.01) {
-        // এই pair এর জন্য এই মাসে কত paid হয়েছে
         const alreadyPaid = paidTransactions
           .filter(p => p.from_user === debt[j].id && p.to_user === cred[i].id)
           .reduce((sum, p) => sum + Number(p.amount || 0), 0);
-
         const remaining = amount - alreadyPaid;
         if (remaining > 0.01) {
           transactions.push({
@@ -142,21 +151,13 @@ export default function SettlementPage() {
         paid_at: new Date().toISOString(),
       });
 
-      // Local state update
       setPaidTransactions(prev => [...prev, {
         from_user: transaction.from_id,
         to_user: transaction.to_id,
         amount: transaction.amount
       }]);
 
-      // History reload
-      const { data: hist } = await supabase
-        .from("settlement_history")
-        .select("*, from_profile:from_user(full_name), to_profile:to_user(full_name)")
-        .order("paid_at", { ascending: false })
-        .limit(20);
-      setHistory(hist || []);
-
+      await loadHistory();
     } catch (error) {
       alert("Error: " + error.message);
     } finally {
@@ -348,7 +349,7 @@ export default function SettlementPage() {
                   history.map((h, i) => (
                     <div key={i} style={{ backgroundColor: "var(--bg-card)", borderRadius: "1rem", padding: "1rem 1.25rem", marginBottom: "0.75rem", border: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                        <div style={{ width: "36px", height: "36px", borderRadius: "50%", backgroundColor: "var(--income)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <div style={{ width: "36px", height: "36px", borderRadius: "50%", backgroundColor: "var(--income)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                           <CheckCircle size={18} color="white" />
                         </div>
                         <div>
@@ -360,7 +361,15 @@ export default function SettlementPage() {
                           </p>
                         </div>
                       </div>
-                      <p style={{ color: "var(--income)", fontWeight: "700" }}>{fmt(h.amount)}</p>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                        <p style={{ color: "var(--income)", fontWeight: "700" }}>{fmt(h.amount)}</p>
+                        {profile?.role === "admin" && (
+                          <button onClick={() => handleDeleteHistory(h.id)}
+                            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--expense)", padding: "0.25rem" }}>
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))
                 )}
