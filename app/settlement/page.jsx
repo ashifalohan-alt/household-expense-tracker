@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CheckCircle, History, Calendar } from "lucide-react";
+import { ArrowLeft, CheckCircle, Calendar } from "lucide-react";
 
 export default function SettlementPage() {
   const router = useRouter();
@@ -44,10 +44,10 @@ export default function SettlementPage() {
         .limit(20);
       setHistory(hist || []);
 
-      // এই মাসে কোন payments already done
+      // amount সহ paid transactions
       const { data: paid } = await supabase
         .from("settlement_history")
-        .select("from_user, to_user")
+        .select("from_user, to_user, amount")
         .eq("month", currentMonth)
         .eq("year", currentYear);
       setPaidTransactions(paid || []);
@@ -100,24 +100,28 @@ export default function SettlementPage() {
     while (i < cred.length && j < debt.length) {
       const amount = Math.min(cred[i].balance, -debt[j].balance);
       if (amount > 0.01) {
-        transactions.push({
-          from_id: debt[j].id,
-          from_name: debt[j].name,
-          to_id: cred[i].id,
-          to_name: cred[i].name,
-          amount,
-        });
+        // এই pair এর জন্য এই মাসে কত paid হয়েছে
+        const alreadyPaid = paidTransactions
+          .filter(p => p.from_user === debt[j].id && p.to_user === cred[i].id)
+          .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+
+        const remaining = amount - alreadyPaid;
+        if (remaining > 0.01) {
+          transactions.push({
+            from_id: debt[j].id,
+            from_name: debt[j].name,
+            to_id: cred[i].id,
+            to_name: cred[i].name,
+            amount: remaining,
+          });
+        }
       }
       cred[i].balance -= amount;
       debt[j].balance += amount;
       if (cred[i].balance < 0.01) i++;
       if (debt[j].balance > -0.01) j++;
     }
-
-    // Already paid transactions filter করো
-    return transactions.filter(t =>
-      !paidTransactions.some(p => p.from_user === t.from_id && p.to_user === t.to_id)
-    );
+    return transactions;
   };
 
   const allTransactions = calculateSettlements();
@@ -138,10 +142,14 @@ export default function SettlementPage() {
         paid_at: new Date().toISOString(),
       });
 
-      // Local state update — reload ছাড়াই সরে যাবে
-      setPaidTransactions(prev => [...prev, { from_user: transaction.from_id, to_user: transaction.to_id }]);
+      // Local state update
+      setPaidTransactions(prev => [...prev, {
+        from_user: transaction.from_id,
+        to_user: transaction.to_id,
+        amount: transaction.amount
+      }]);
 
-      // History তে যোগ করো
+      // History reload
       const { data: hist } = await supabase
         .from("settlement_history")
         .select("*, from_profile:from_user(full_name), to_profile:to_user(full_name)")
