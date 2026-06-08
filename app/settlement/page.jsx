@@ -17,6 +17,7 @@ export default function SettlementPage() {
   const [marking, setMarking] = useState(null);
   const [dateMode, setDateMode] = useState("monthly");
   const [calculated, setCalculated] = useState(false);
+  const [customAmounts, setCustomAmounts] = useState({}); // প্রতিটি transaction এর custom amount
 
   const now = new Date();
   const currentMonth = now.getMonth() + 1;
@@ -38,7 +39,6 @@ export default function SettlementPage() {
       const { data: prof } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       setProfile(prof);
 
-      // Admin বাদ দিয়ে শুধু regular user load করো
       const { data: profs } = await supabase
         .from("profiles")
         .select("*")
@@ -80,7 +80,6 @@ export default function SettlementPage() {
       .lte("expense_date", e);
     setExpenses(exp || []);
 
-    // Custom range এর জন্যও paid transactions reload করো
     const { data: paid } = await supabase
       .from("settlement_history")
       .select("from_user, to_user, amount")
@@ -153,24 +152,53 @@ export default function SettlementPage() {
   const userSpent = expenses.filter(e => e.user_id === user?.id).reduce((sum, e) => sum + Number(e.total_amount), 0);
   const fmt = (amount) => `CA$${Number(amount).toFixed(2)}`;
 
+  const getCustomAmount = (transaction) => {
+    const key = `${transaction.from_id}-${transaction.to_id}`;
+    return customAmounts[key] !== undefined ? customAmounts[key] : transaction.amount.toFixed(2);
+  };
+
+  const setCustomAmount = (transaction, value) => {
+    const key = `${transaction.from_id}-${transaction.to_id}`;
+    setCustomAmounts(prev => ({ ...prev, [key]: value }));
+  };
+
   const handleMarkPaid = async (transaction) => {
-    setMarking(`${transaction.from_id}-${transaction.to_id}`);
+    const key = `${transaction.from_id}-${transaction.to_id}`;
+    const inputAmount = parseFloat(customAmounts[key] ?? transaction.amount);
+
+    // Validation
+    if (isNaN(inputAmount) || inputAmount <= 0) {
+      alert("Please enter a valid amount.");
+      return;
+    }
+    if (inputAmount > transaction.amount + 0.01) {
+      alert(`Amount cannot exceed CA$${transaction.amount.toFixed(2)}`);
+      return;
+    }
+
+    setMarking(key);
     try {
       await supabase.from("settlement_history").insert({
         from_user: transaction.from_id,
         to_user: transaction.to_id,
-        amount: transaction.amount,
+        amount: inputAmount,
         month: currentMonth,
         year: currentYear,
         paid_at: new Date().toISOString(),
       });
 
-      // Local state তাৎক্ষণিক update করো — page reload ছাড়াই Pending সরে যাবে
       setPaidTransactions(prev => [...prev, {
         from_user: transaction.from_id,
         to_user: transaction.to_id,
-        amount: transaction.amount
+        amount: inputAmount,
       }]);
+
+      // Custom amount reset করো
+      setCustomAmounts(prev => {
+        const updated = { ...prev };
+        delete updated[key];
+        return updated;
+      });
 
       await loadHistory();
     } catch (error) {
@@ -313,7 +341,12 @@ export default function SettlementPage() {
                 ) : (
                   allTransactions.map((t, i) => {
                     const isMe = t.from_id === user?.id;
-                    const isPaying = marking === `${t.from_id}-${t.to_id}`;
+                    const key = `${t.from_id}-${t.to_id}`;
+                    const isPaying = marking === key;
+                    const currentInput = getCustomAmount(t);
+                    const inputNum = parseFloat(currentInput);
+                    const isPartial = !isNaN(inputNum) && inputNum < t.amount - 0.01;
+
                     return (
                       <div key={i} style={{ backgroundColor: "var(--bg-card)", borderRadius: "1rem", padding: "1.25rem", marginBottom: "0.75rem", border: `1px solid ${isMe ? "var(--expense)" : "var(--border)"}` }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isMe ? "1rem" : "0" }}>
@@ -336,16 +369,55 @@ export default function SettlementPage() {
                               </p>
                             </div>
                           </div>
-                          <p style={{ color: isMe ? "var(--expense)" : "var(--text-primary)", fontWeight: "800", fontSize: "1.1rem" }}>
-                            {fmt(t.amount)}
-                          </p>
+                          <div style={{ textAlign: "right" }}>
+                            <p style={{ color: isMe ? "var(--expense)" : "var(--text-primary)", fontWeight: "800", fontSize: "1.1rem" }}>
+                              {fmt(t.amount)}
+                            </p>
+                            <p style={{ color: "var(--text-secondary)", fontSize: "0.7rem" }}>total due</p>
+                          </div>
                         </div>
+
                         {isMe && (
-                          <button onClick={() => handleMarkPaid(t)} disabled={isPaying}
-                            style={{ width: "100%", padding: "0.65rem", borderRadius: "0.75rem", border: "none", backgroundColor: isPaying ? "var(--text-secondary)" : "var(--income)", color: "white", fontWeight: "600", fontSize: "0.875rem", cursor: isPaying ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
-                            <CheckCircle size={16} />
-                            {isPaying ? "Processing..." : "Mark as Paid"}
-                          </button>
+                          <div>
+                            {/* Amount input */}
+                            <div style={{ marginBottom: "0.75rem" }}>
+                              <p style={{ color: "var(--text-secondary)", fontSize: "0.75rem", marginBottom: "0.4rem" }}>
+                                Amount to pay now
+                              </p>
+                              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                <span style={{ color: "var(--text-secondary)", fontSize: "0.9rem", fontWeight: "600" }}>CA$</span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0.01"
+                                  max={t.amount}
+                                  value={currentInput}
+                                  onChange={(e) => setCustomAmount(t, e.target.value)}
+                                  style={{
+                                    ...inputStyle,
+                                    flex: 1,
+                                    fontWeight: "700",
+                                    fontSize: "1rem",
+                                    color: "var(--text-primary)",
+                                    border: `1px solid ${isPartial ? "var(--accent)" : "var(--border)"}`,
+                                  }}
+                                />
+                              </div>
+                              {isPartial && (
+                                <p style={{ color: "var(--accent)", fontSize: "0.72rem", marginTop: "0.35rem" }}>
+                                  ⚡ Partial payment — CA${(t.amount - inputNum).toFixed(2)} will remain
+                                </p>
+                              )}
+                            </div>
+
+                            <button
+                              onClick={() => handleMarkPaid(t)}
+                              disabled={isPaying}
+                              style={{ width: "100%", padding: "0.65rem", borderRadius: "0.75rem", border: "none", backgroundColor: isPaying ? "var(--text-secondary)" : "var(--income)", color: "white", fontWeight: "600", fontSize: "0.875rem", cursor: isPaying ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+                              <CheckCircle size={16} />
+                              {isPaying ? "Processing..." : isPartial ? `Pay CA$${inputNum.toFixed(2)} Now` : "Mark as Paid"}
+                            </button>
+                          </div>
                         )}
                       </div>
                     );
