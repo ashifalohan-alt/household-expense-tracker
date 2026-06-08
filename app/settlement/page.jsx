@@ -17,6 +17,7 @@ export default function SettlementPage() {
   const [marking, setMarking] = useState(null);
   const [dateMode, setDateMode] = useState("monthly");
   const [calculated, setCalculated] = useState(false);
+  const [emailStatus, setEmailStatus] = useState(null); // null | "sending" | "sent" | "failed"
 
   const now = new Date();
   const currentMonth = now.getMonth() + 1;
@@ -141,7 +142,9 @@ export default function SettlementPage() {
 
   const handleMarkPaid = async (transaction) => {
     setMarking(`${transaction.from_id}-${transaction.to_id}`);
+    setEmailStatus(null);
     try {
+      // Step 1: Supabase তে settlement_history তে record save করো
       await supabase.from("settlement_history").insert({
         from_user: transaction.from_id,
         to_user: transaction.to_id,
@@ -158,8 +161,48 @@ export default function SettlementPage() {
       }]);
 
       await loadHistory();
+
+      // Step 2: Email পাঠাও — প্রতিটি user কে আলাদা personalized email
+      setEmailStatus("sending");
+
+      // Supabase থেকে সব user এর email নিয়ে আসো
+      const { data: profilesWithEmail } = await supabase
+        .from("profiles")
+        .select("id, full_name, email");
+
+      const payerProfile = profilesWithEmail?.find(p => p.id === transaction.from_id);
+      const recipientProfile = profilesWithEmail?.find(p => p.id === transaction.to_id);
+
+      const emailRes = await fetch("/api/send-settlement-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          payer: { id: transaction.from_id, name: transaction.from_name },
+          recipient: { id: transaction.to_id, name: transaction.to_name },
+          amount: transaction.amount,
+          profiles: profilesWithEmail || [],
+          expenses: expenses,
+          totalExpense: totalExpense,
+          perPerson: perPerson,
+          month: currentMonth,
+          year: currentYear,
+        }),
+      });
+
+      const emailData = await emailRes.json();
+
+      if (emailData.success) {
+        setEmailStatus("sent");
+        setTimeout(() => setEmailStatus(null), 4000);
+      } else {
+        setEmailStatus("failed");
+        setTimeout(() => setEmailStatus(null), 4000);
+      }
+
     } catch (error) {
       alert("Error: " + error.message);
+      setEmailStatus("failed");
+      setTimeout(() => setEmailStatus(null), 4000);
     } finally {
       setMarking(null);
     }
@@ -192,6 +235,25 @@ export default function SettlementPage() {
           </p>
         </div>
       </div>
+
+      {/* Email status toast notification */}
+      {emailStatus && (
+        <div style={{
+          position: "fixed", top: "70px", left: "50%", transform: "translateX(-50%)",
+          zIndex: 999, padding: "0.65rem 1.25rem", borderRadius: "2rem",
+          fontSize: "0.85rem", fontWeight: "600",
+          backgroundColor: emailStatus === "sending" ? "#2D3748" : emailStatus === "sent" ? "#1a2e1a" : "#2e1a1a",
+          color: emailStatus === "sending" ? "#97A3B0" : emailStatus === "sent" ? "#4E8770" : "#E29578",
+          border: `1px solid ${emailStatus === "sending" ? "#374151" : emailStatus === "sent" ? "#4E8770" : "#E29578"}`,
+          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+          transition: "all 0.3s ease",
+          whiteSpace: "nowrap",
+        }}>
+          {emailStatus === "sending" && "📧 Sending emails..."}
+          {emailStatus === "sent" && "✅ Emails sent to everyone!"}
+          {emailStatus === "failed" && "⚠️ Payment saved, but email failed"}
+        </div>
+      )}
 
       <div style={{ padding: "1rem", maxWidth: "600px", margin: "0 auto" }}>
         <div style={{ display: "flex", backgroundColor: "var(--bg-card)", borderRadius: "0.75rem", padding: "4px", marginBottom: "1rem", border: "1px solid var(--border)" }}>
@@ -326,10 +388,10 @@ export default function SettlementPage() {
                           </p>
                         </div>
                         {isMe && (
-                          <button onClick={() => handleMarkPaid(t)} disabled={isPaying}
-                            style={{ width: "100%", padding: "0.65rem", borderRadius: "0.75rem", border: "none", backgroundColor: isPaying ? "var(--text-secondary)" : "var(--income)", color: "white", fontWeight: "600", fontSize: "0.875rem", cursor: isPaying ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+                          <button onClick={() => handleMarkPaid(t)} disabled={isPaying || emailStatus === "sending"}
+                            style={{ width: "100%", padding: "0.65rem", borderRadius: "0.75rem", border: "none", backgroundColor: isPaying || emailStatus === "sending" ? "var(--text-secondary)" : "var(--income)", color: "white", fontWeight: "600", fontSize: "0.875rem", cursor: isPaying || emailStatus === "sending" ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
                             <CheckCircle size={16} />
-                            {isPaying ? "Processing..." : "Mark as Paid"}
+                            {isPaying ? "Saving..." : emailStatus === "sending" ? "Sending emails..." : "Mark as Paid"}
                           </button>
                         )}
                       </div>
