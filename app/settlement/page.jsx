@@ -219,11 +219,10 @@ export default function SettlementPage() {
       // Step 1: PDF generate করো
       await generatePDF();
 
-      // Step 2: সব expenses delete করো
-      await supabase.from("expenses").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-
-      // Step 3: সব settlement_history delete করো
-      await supabase.from("settlement_history").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      // Step 2: API route দিয়ে সব data delete করো
+      const clearRes = await fetch("/api/clear-all-data", { method: "POST" });
+      const clearData = await clearRes.json();
+      if (!clearData.success) throw new Error(clearData.error);
 
       // Step 4: Local state reset
       setExpenses([]);
@@ -233,6 +232,7 @@ export default function SettlementPage() {
       setCustomAmounts({});
 
       alert("✅ PDF downloaded and all data cleared! Fresh start.");
+      window.location.reload();
     } catch (error) {
       alert("Error: " + error.message);
     } finally {
