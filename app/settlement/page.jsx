@@ -1,8 +1,8 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "../lib/supabase";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CheckCircle, Calendar, Trash2 } from "lucide-react";
+import { ArrowLeft, CheckCircle, Calendar, Trash2, Download } from "lucide-react";
 
 export default function SettlementPage() {
   const router = useRouter();
@@ -17,7 +17,9 @@ export default function SettlementPage() {
   const [marking, setMarking] = useState(null);
   const [dateMode, setDateMode] = useState("monthly");
   const [calculated, setCalculated] = useState(false);
-  const [customAmounts, setCustomAmounts] = useState({}); // প্রতিটি transaction এর custom amount
+  const [customAmounts, setCustomAmounts] = useState({});
+  const [clearing, setClearing] = useState(false);
+  const reportRef = useRef(null);
 
   const now = new Date();
   const currentMonth = now.getMonth() + 1;
@@ -152,6 +154,8 @@ export default function SettlementPage() {
   const userSpent = expenses.filter(e => e.user_id === user?.id).reduce((sum, e) => sum + Number(e.total_amount), 0);
   const fmt = (amount) => `CA$${Number(amount).toFixed(2)}`;
 
+  const isAllSettled = calculated && allTransactions.length === 0 && totalExpense > 0;
+
   const getCustomAmount = (transaction) => {
     const key = `${transaction.from_id}-${transaction.to_id}`;
     return customAmounts[key] !== undefined ? customAmounts[key] : transaction.amount.toFixed(2);
@@ -166,7 +170,6 @@ export default function SettlementPage() {
     const key = `${transaction.from_id}-${transaction.to_id}`;
     const inputAmount = parseFloat(customAmounts[key] ?? transaction.amount);
 
-    // Validation
     if (isNaN(inputAmount) || inputAmount <= 0) {
       alert("Please enter a valid amount.");
       return;
@@ -193,7 +196,6 @@ export default function SettlementPage() {
         amount: inputAmount,
       }]);
 
-      // Custom amount reset করো
       setCustomAmounts(prev => {
         const updated = { ...prev };
         delete updated[key];
@@ -206,6 +208,200 @@ export default function SettlementPage() {
     } finally {
       setMarking(null);
     }
+  };
+
+  // PDF generate করো তারপর সব data delete করো
+  const handleFinalSettle = async () => {
+    if (!confirm("This will generate a PDF report and delete ALL expenses and settlement history. Are you sure?")) return;
+
+    setClearing(true);
+    try {
+      // Step 1: PDF generate করো
+      await generatePDF();
+
+      // Step 2: সব expenses delete করো
+      await supabase.from("expenses").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+
+      // Step 3: সব settlement_history delete করো
+      await supabase.from("settlement_history").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+
+      // Step 4: Local state reset
+      setExpenses([]);
+      setHistory([]);
+      setPaidTransactions([]);
+      setCalculated(false);
+      setCustomAmounts({});
+
+      alert("✅ PDF downloaded and all data cleared! Fresh start.");
+    } catch (error) {
+      alert("Error: " + error.message);
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const generatePDF = async () => {
+    const { default: jsPDF } = await import("jspdf");
+    const doc = new jsPDF();
+
+    const periodLabel = `${monthNames[currentMonth - 1]} ${currentYear}`;
+    let y = 20;
+
+    // Header
+    doc.setFillColor(30, 37, 43);
+    doc.rect(0, 0, 210, 40, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("Family Expense Tracker", 105, 18, { align: "center" });
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(151, 163, 176);
+    doc.text(`Settlement Report — ${periodLabel}`, 105, 28, { align: "center" });
+    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 105, 36, { align: "center" });
+
+    y = 55;
+
+    // Summary section
+    doc.setTextColor(226, 109, 92);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Summary", 15, y);
+    y += 8;
+
+    doc.setDrawColor(226, 109, 92);
+    doc.line(15, y, 195, y);
+    y += 8;
+
+    doc.setTextColor(50, 50, 50);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Total Expenses: ${fmt(totalExpense)}`, 15, y);
+    doc.text(`Per Person Share: ${fmt(perPerson)}`, 105, y);
+    y += 8;
+    doc.text(`Number of Members: ${profiles.length}`, 15, y);
+    doc.text(`Period: ${periodLabel}`, 105, y);
+    y += 14;
+
+    // Everyone's balance
+    doc.setTextColor(226, 109, 92);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Members' Balance", 15, y);
+    y += 8;
+    doc.setDrawColor(226, 109, 92);
+    doc.line(15, y, 195, y);
+    y += 8;
+
+    profiles.forEach((p) => {
+      const spent = expenses.filter(e => e.user_id === p.id).reduce((sum, e) => sum + Number(e.total_amount), 0);
+      const balance = spent - perPerson;
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(50, 50, 50);
+      doc.text(p.full_name, 15, y);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Spent: ${fmt(spent)}`, 80, y);
+      doc.text(`Share: ${fmt(perPerson)}`, 130, y);
+      const balText = balance >= 0 ? `+${fmt(balance)} (receives)` : `-${fmt(Math.abs(balance))} (pays)`;
+      doc.setTextColor(balance >= 0 ? 78 : 226, balance >= 0 ? 135 : 109, balance >= 0 ? 112 : 92);
+      doc.text(balText, 15, y + 6);
+      doc.setTextColor(50, 50, 50);
+      y += 16;
+    });
+
+    y += 4;
+
+    // Settlement transactions
+    doc.setTextColor(226, 109, 92);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Settlement Transactions", 15, y);
+    y += 8;
+    doc.setDrawColor(226, 109, 92);
+    doc.line(15, y, 195, y);
+    y += 8;
+
+    if (history.length === 0) {
+      doc.setFontSize(10);
+      doc.setTextColor(150, 150, 150);
+      doc.setFont("helvetica", "normal");
+      doc.text("No settlement transactions recorded.", 15, y);
+      y += 10;
+    } else {
+      history.forEach((h, idx) => {
+        if (y > 260) { doc.addPage(); y = 20; }
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(50, 50, 50);
+        doc.text(`${idx + 1}. ${h.from_profile?.full_name} → ${h.to_profile?.full_name}`, 15, y);
+        doc.setTextColor(78, 135, 112);
+        doc.setFont("helvetica", "bold");
+        doc.text(fmt(h.amount), 160, y);
+        doc.setTextColor(150, 150, 150);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.text(new Date(h.paid_at).toLocaleDateString(), 15, y + 5);
+        y += 14;
+      });
+    }
+
+    y += 4;
+
+    // Expense details
+    if (y > 240) { doc.addPage(); y = 20; }
+    doc.setTextColor(226, 109, 92);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Expense Details", 15, y);
+    y += 8;
+    doc.setDrawColor(226, 109, 92);
+    doc.line(15, y, 195, y);
+    y += 8;
+
+    // Table header
+    doc.setFillColor(240, 240, 240);
+    doc.rect(15, y - 4, 180, 8, "F");
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(80, 80, 80);
+    doc.text("Description", 17, y + 1);
+    doc.text("Added By", 90, y + 1);
+    doc.text("Date", 130, y + 1);
+    doc.text("Amount", 168, y + 1);
+    y += 10;
+
+    expenses.forEach((exp, idx) => {
+      if (y > 270) { doc.addPage(); y = 20; }
+      const addedBy = profiles.find(p => p.id === exp.user_id)?.full_name || "Unknown";
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(50, 50, 50);
+
+      if (idx % 2 === 0) {
+        doc.setFillColor(250, 250, 250);
+        doc.rect(15, y - 4, 180, 8, "F");
+      }
+
+      const descText = exp.description || exp.category || "Expense";
+      doc.text(descText.length > 30 ? descText.substring(0, 28) + ".." : descText, 17, y + 1);
+      doc.text(addedBy, 90, y + 1);
+      doc.text(exp.expense_date || "", 130, y + 1);
+      doc.setFont("helvetica", "bold");
+      doc.text(fmt(exp.total_amount), 168, y + 1);
+      y += 9;
+    });
+
+    // Footer
+    const pageCount = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(180, 180, 180);
+      doc.text(`Family Expense Tracker — Page ${i} of ${pageCount}`, 105, 290, { align: "center" });
+    }
+
+    doc.save(`settlement-${monthNames[currentMonth - 1]}-${currentYear}.pdf`);
   };
 
   const inputStyle = {
@@ -333,10 +529,28 @@ export default function SettlementPage() {
             {activeTab === "current" && (
               <div>
                 {allTransactions.length === 0 ? (
-                  <div style={{ backgroundColor: "var(--bg-card)", borderRadius: "1rem", padding: "2rem", textAlign: "center", border: "1px solid var(--border)" }}>
+                  <div style={{ backgroundColor: "var(--bg-card)", borderRadius: "1rem", padding: "2rem", textAlign: "center", border: `2px solid ${totalExpense > 0 ? "var(--income)" : "var(--border)"}` }}>
                     <CheckCircle size={48} color="var(--income)" style={{ margin: "0 auto 1rem" }} />
                     <p style={{ color: "var(--income)", fontWeight: "700", fontSize: "1rem" }}>All Settled! 🎉</p>
-                    <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginTop: "0.5rem" }}>No pending payments</p>
+                    <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginTop: "0.5rem", marginBottom: "1.5rem" }}>
+                      {totalExpense > 0 ? "Everyone has paid their share." : "No expenses this period."}
+                    </p>
+
+                    {totalExpense > 0 && (
+                      <button
+                        onClick={handleFinalSettle}
+                        disabled={clearing}
+                        style={{
+                          width: "100%", padding: "0.85rem", borderRadius: "0.75rem", border: "none",
+                          backgroundColor: clearing ? "var(--text-secondary)" : "var(--accent)",
+                          color: "white", fontWeight: "700", fontSize: "0.95rem",
+                          cursor: clearing ? "not-allowed" : "pointer",
+                          display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem"
+                        }}>
+                        <Download size={18} />
+                        {clearing ? "Generating PDF & Clearing..." : "📄 Download Report & Clear All Data"}
+                      </button>
+                    )}
                   </div>
                 ) : (
                   allTransactions.map((t, i) => {
@@ -379,7 +593,6 @@ export default function SettlementPage() {
 
                         {isMe && (
                           <div>
-                            {/* Amount input */}
                             <div style={{ marginBottom: "0.75rem" }}>
                               <p style={{ color: "var(--text-secondary)", fontSize: "0.75rem", marginBottom: "0.4rem" }}>
                                 Amount to pay now
@@ -468,3 +681,4 @@ export default function SettlementPage() {
     </div>
   );
 }
+
